@@ -247,7 +247,7 @@ func (t *BaseMiddleware) Base() *BaseMiddleware {
 	return t
 }
 
-// Logger returns the provided *logrus.Entry
+// Logger returns the logger *logrus.Entry from *BaseMiddleware.
 func (t *BaseMiddleware) Logger() *logrus.Entry {
 	if t.logger == nil {
 		return logrus.NewEntry(log)
