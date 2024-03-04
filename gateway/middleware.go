@@ -242,6 +242,7 @@ type BaseMiddleware struct {
 }
 
 // Base exists to access the underlying *APISpec inside the returned *BaseMiddleware.
+// The returned object is also used to invoke `FireEvent` and `UpdateRequestSession`.
 func (t *BaseMiddleware) Base() *BaseMiddleware {
 	return t
 }
