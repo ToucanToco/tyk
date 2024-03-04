@@ -10,7 +10,6 @@ import (
 	"io/ioutil"
 	"net/http"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/TykTechnologies/tyk/internal/cache"
@@ -47,13 +46,15 @@ type TykMiddleware interface {
 	Init()
 	Base() *BaseMiddleware
 
-	SetName(string)
-	SetRequestLogger(*http.Request)
+	Name() string
+
 	Logger() *logrus.Entry
+
+	GetRequestLogger(*http.Request, string) *logrus.Entry
+
 	Config() (interface{}, error)
 	ProcessRequest(w http.ResponseWriter, r *http.Request, conf interface{}) (error, int) // Handles request
 	EnabledForSpec() bool
-	Name() string
 }
 
 type TraceMiddleware struct {
@@ -117,7 +118,6 @@ func (gw *Gateway) createMiddleware(actualMW TykMiddleware) func(http.Handler) h
 	}
 	// construct a new instance
 	mw.Init()
-	mw.SetName(mw.Name())
 	mw.Logger().Debug("Init")
 
 	// Pull the configuration
@@ -128,7 +128,7 @@ func (gw *Gateway) createMiddleware(actualMW TykMiddleware) func(http.Handler) h
 
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			mw.SetRequestLogger(r)
+			mwLog := mw.GetRequestLogger(r, mw.Name())
 
 			if gw.GetConfig().NewRelic.AppName != "" {
 				if txn, ok := w.(newrelic.Transaction); ok {
@@ -154,7 +154,7 @@ func (gw *Gateway) createMiddleware(actualMW TykMiddleware) func(http.Handler) h
 			}
 
 			startTime := time.Now()
-			mw.Logger().WithField("ts", startTime.UnixNano()).Debug("Started")
+			mwLog.WithField("ts", startTime.UnixNano()).Debug("Started")
 
 			if mw.Base().Spec.CORS.OptionsPassthrough && r.Method == "OPTIONS" {
 				h.ServeHTTP(w, r)
@@ -181,7 +181,7 @@ func (gw *Gateway) createMiddleware(actualMW TykMiddleware) func(http.Handler) h
 					job.TimingKv(eventName+".exec_time", finishTime.Nanoseconds(), meta)
 				}
 
-				mw.Logger().WithError(err).WithField("code", errCode).WithField("ns", finishTime.Nanoseconds()).Debug("Finished")
+				mwLog.WithError(err).WithField("code", errCode).WithField("ns", finishTime.Nanoseconds()).Debug("Finished")
 				return
 			}
 
@@ -192,7 +192,7 @@ func (gw *Gateway) createMiddleware(actualMW TykMiddleware) func(http.Handler) h
 				job.TimingKv(eventName+".exec_time", finishTime.Nanoseconds(), meta)
 			}
 
-			mw.Logger().WithField("code", errCode).WithField("ns", finishTime.Nanoseconds()).Debug("Finished")
+			mwLog.WithField("code", errCode).WithField("ns", finishTime.Nanoseconds()).Debug("Finished")
 
 			// Special code, bypasses all other execution
 			if errCode != mwStatusRespond {
@@ -238,49 +238,26 @@ type BaseMiddleware struct {
 	Proxy ReturningHttpHandler
 	Gw    *Gateway `json:"-"`
 
-	loggerMu sync.Mutex
-	logger   *logrus.Entry
+	logger *logrus.Entry
 }
 
+// Base exists to access the underlying *APISpec inside the returned *BaseMiddleware.
 func (t *BaseMiddleware) Base() *BaseMiddleware {
-	t.loggerMu.Lock()
-	defer t.loggerMu.Unlock()
-
-	return &BaseMiddleware{
-		Spec:   t.Spec,
-		Proxy:  t.Proxy,
-		Gw:     t.Gw,
-		logger: t.logger,
-	}
+	return t
 }
 
-func (t *BaseMiddleware) Logger() (logger *logrus.Entry) {
-	t.loggerMu.Lock()
-	defer t.loggerMu.Unlock()
-
+// Logger returns the provided *logrus.Entry
+func (t *BaseMiddleware) Logger() *logrus.Entry {
 	if t.logger == nil {
-		t.logger = logrus.NewEntry(log)
+		return logrus.NewEntry(log)
 	}
 
 	return t.logger
 }
 
-func (t *BaseMiddleware) SetName(name string) {
-	logger := t.Logger()
-
-	t.loggerMu.Lock()
-	defer t.loggerMu.Unlock()
-
-	t.logger = logger.WithField("mw", name)
-}
-
-func (t *BaseMiddleware) SetRequestLogger(r *http.Request) {
-	logger := t.Logger()
-
-	t.loggerMu.Lock()
-	defer t.loggerMu.Unlock()
-
-	t.logger = t.Gw.getLogEntryForRequest(logger, r, ctxGetAuthToken(r), nil)
+// GetRequestLogger returns a *logrus.Entry filled with a *http.Request.
+func (t *BaseMiddleware) GetRequestLogger(r *http.Request, name string) *logrus.Entry {
+	return t.Gw.getLogEntryForRequest(t.Logger().WithField("mw", name), r, ctxGetAuthToken(r), nil)
 }
 
 func (t *BaseMiddleware) Init() {}
