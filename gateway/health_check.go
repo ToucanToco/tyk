@@ -12,25 +12,31 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"github.com/TykTechnologies/tyk/apidef"
 	"github.com/TykTechnologies/tyk/header"
+	"github.com/TykTechnologies/tyk/internal/model"
 	"github.com/TykTechnologies/tyk/storage"
 )
 
-func (gw *Gateway) setCurrentHealthCheckInfo(h map[string]apidef.HealthCheckItem) {
+type (
+	HealthCheckItem     = model.HealthCheckItem
+	HealthCheckStatus   = model.HealthCheckStatus
+	HealthCheckResponse = model.HealthCheckResponse
+)
+
+func (gw *Gateway) setCurrentHealthCheckInfo(h map[string]HealthCheckItem) {
 	gw.healthCheckInfo.Store(h)
 }
 
-func (gw *Gateway) getHealthCheckInfo() map[string]apidef.HealthCheckItem {
-	ret, ok := gw.healthCheckInfo.Load().(map[string]apidef.HealthCheckItem)
+func (gw *Gateway) getHealthCheckInfo() map[string]HealthCheckItem {
+	ret, ok := gw.healthCheckInfo.Load().(map[string]HealthCheckItem)
 	if !ok {
-		return make(map[string]apidef.HealthCheckItem, 0)
+		return make(map[string]HealthCheckItem, 0)
 	}
 	return ret
 }
 
 func (gw *Gateway) initHealthCheck(ctx context.Context) {
-	gw.setCurrentHealthCheckInfo(make(map[string]apidef.HealthCheckItem, 3))
+	gw.setCurrentHealthCheckInfo(make(map[string]HealthCheckItem, 3))
 
 	go func(ctx context.Context) {
 		var n = gw.GetConfig().LivenessCheck.CheckDuration
@@ -58,12 +64,12 @@ func (gw *Gateway) initHealthCheck(ctx context.Context) {
 }
 
 type SafeHealthCheck struct {
-	info map[string]apidef.HealthCheckItem
+	info map[string]HealthCheckItem
 	mux  sync.Mutex
 }
 
 func (gw *Gateway) gatherHealthChecks() {
-	allInfos := SafeHealthCheck{info: make(map[string]apidef.HealthCheckItem, 3)}
+	allInfos := SafeHealthCheck{info: make(map[string]HealthCheckItem, 3)}
 
 	redisStore := storage.RedisCluster{KeyPrefix: "livenesscheck-", ConnectionHandler: gw.StorageConnectionHandler}
 
@@ -75,9 +81,9 @@ func (gw *Gateway) gatherHealthChecks() {
 	go func() {
 		defer wg.Done()
 
-		var checkItem = apidef.HealthCheckItem{
-			Status:        apidef.Pass,
-			ComponentType: apidef.Datastore,
+		var checkItem = HealthCheckItem{
+			Status:        model.Pass,
+			ComponentType: model.Datastore,
 			Time:          time.Now().Format(time.RFC3339),
 		}
 
@@ -85,7 +91,7 @@ func (gw *Gateway) gatherHealthChecks() {
 		if err != nil {
 			mainLog.WithField("liveness-check", true).WithError(err).Error("Redis health check failed")
 			checkItem.Output = err.Error()
-			checkItem.Status = apidef.Fail
+			checkItem.Status = model.Fail
 		}
 
 		allInfos.mux.Lock()
@@ -99,9 +105,9 @@ func (gw *Gateway) gatherHealthChecks() {
 		go func() {
 			defer wg.Done()
 
-			var checkItem = apidef.HealthCheckItem{
-				Status:        apidef.Pass,
-				ComponentType: apidef.Datastore,
+			var checkItem = HealthCheckItem{
+				Status:        model.Pass,
+				ComponentType: model.Datastore,
 				Time:          time.Now().Format(time.RFC3339),
 			}
 
@@ -109,14 +115,14 @@ func (gw *Gateway) gatherHealthChecks() {
 				err := errors.New("Dashboard service not initialized")
 				mainLog.WithField("liveness-check", true).Error(err)
 				checkItem.Output = err.Error()
-				checkItem.Status = apidef.Fail
+				checkItem.Status = model.Fail
 			} else if err := gw.DashService.Ping(); err != nil {
 				mainLog.WithField("liveness-check", true).Error(err)
 				checkItem.Output = err.Error()
-				checkItem.Status = apidef.Fail
+				checkItem.Status = model.Fail
 			}
 
-			checkItem.ComponentType = apidef.System
+			checkItem.ComponentType = model.System
 
 			allInfos.mux.Lock()
 			allInfos.info["dashboard"] = checkItem
@@ -131,18 +137,18 @@ func (gw *Gateway) gatherHealthChecks() {
 		go func() {
 			defer wg.Done()
 
-			var checkItem = apidef.HealthCheckItem{
-				Status:        apidef.Pass,
-				ComponentType: apidef.Datastore,
+			var checkItem = HealthCheckItem{
+				Status:        model.Pass,
+				ComponentType: model.Datastore,
 				Time:          time.Now().Format(time.RFC3339),
 			}
 
 			if !rpc.Login() {
 				checkItem.Output = "Could not connect to RPC"
-				checkItem.Status = apidef.Fail
+				checkItem.Status = model.Fail
 			}
 
-			checkItem.ComponentType = apidef.System
+			checkItem.ComponentType = model.System
 
 			allInfos.mux.Lock()
 			allInfos.info["rpc"] = checkItem
@@ -165,8 +171,8 @@ func (gw *Gateway) liveCheckHandler(w http.ResponseWriter, r *http.Request) {
 
 	checks := gw.getHealthCheckInfo()
 
-	res := apidef.HealthCheckResponse{
-		Status:      apidef.Pass,
+	res := HealthCheckResponse{
+		Status:      model.Pass,
 		Version:     VERSION,
 		Description: "Tyk GW",
 		Details:     checks,
@@ -175,22 +181,22 @@ func (gw *Gateway) liveCheckHandler(w http.ResponseWriter, r *http.Request) {
 	var failCount int
 
 	for _, v := range checks {
-		if v.Status == apidef.Fail {
+		if v.Status == model.Fail {
 			failCount++
 		}
 	}
 
-	var status apidef.HealthCheckStatus
+	var status HealthCheckStatus
 
 	switch failCount {
 	case 0:
-		status = apidef.Pass
+		status = model.Pass
 
 	case len(checks):
-		status = apidef.Fail
+		status = model.Fail
 
 	default:
-		status = apidef.Warn
+		status = model.Warn
 	}
 
 	res.Status = status
